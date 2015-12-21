@@ -1,0 +1,809 @@
+// 12-01-2015 program 1 pulsing circles saved to another file; redoing program 1 with motion sensitive matrix lines
+// 11-29-2015 working on program 1
+// 11-29-2015 working on program 3, redid program 4, no more MIDI :-(
+// 11-28-2015 button program 2 up and running
+// 11-26-2015 working on MIDI program -- MIDI ports not attached d'oh!
+// 11-25-2015 fixed button states and program triggers
+// 11-23-2015 correct orientation of gyro input (sort of worked)
+// 11-15-2014 first attempt to add MIDI in/out and visualization based on MIDI
+// 11-13-2015 code to transform sensor coordinates based on layout of panel matrix
+// 11-11-2015 add test program that prints data to serial port when latch button pushed
+// 11-10-2015 add parameter for program selection based on momentary buttons
+
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_LSM9DS0.h>
+
+#include <Adafruit_GFX.h>   // Core graphics library
+#include <RGBmatrixPanel.h> // Hardware-specific library
+
+
+/* Assign a unique base ID for this sensor */   
+Adafruit_LSM9DS0 lsm = Adafruit_LSM9DS0(1000);  // Use I2C, ID #1000
+
+
+/* Or, use Hardware SPI:
+  SCK -> SPI CLK
+  SDA -> SPI MOSI
+  G_SDO + XM_SDO -> tied together to SPI MISO
+  then select any two pins for the two CS lines:
+*/
+
+//#define LSM9DS0_XM_CS 10
+//#define LSM9DS0_GYRO_CS 9
+//Adafruit_LSM9DS0 lsm = Adafruit_LSM9DS0(LSM9DS0_XM_CS, LSM9DS0_GYRO_CS, 1000);
+
+/* Or, use Software SPI:
+  G_SDO + XM_SDO -> tied together to the MISO pin!
+  then select any pins for the SPI lines, and the two CS pins above
+*/
+
+//#define LSM9DS0_SCLK 13
+//#define LSM9DS0_MISO 12
+//#define LSM9DS0_MOSI 11
+
+//Adafruit_LSM9DS0 lsm = Adafruit_LSM9DS0(LSM9DS0_SCLK, LSM9DS0_MISO, LSM9DS0_MOSI, LSM9DS0_XM_CS, LSM9DS0_GYRO_CS, 1000);
+
+// If your 32x32 matrix has the SINGLE HEADER input,
+// use this pinout:
+#define CLK 11  // MUST be on PORTB! (Use pin 11 on Mega)
+#define OE  9
+#define LAT 10
+#define A   A0
+#define B   A1
+#define C   A2
+#define D   A3
+
+// this part is for the RGB matrix library fork located at
+// https://github.com/ecdr/RGB-matrix-Panel/tree/tiva
+
+#define NUMDISPLAYS 4
+#define DOUBLEBUFFER false
+
+RGBmatrixPanel matrix(A, B, C, D, CLK, LAT, OE, DOUBLEBUFFER, NUMDISPLAYS);
+byte pwidth = 32 * NUMDISPLAYS;
+byte pheight = 32;
+
+//button variables
+byte buttonprogram = 1;
+int testprogram= 0;
+int buttonTestState = LOW; // Test program prints data to serial port
+int button1State = LOW; // pulsing circle program  
+int button2State = LOW; // squares program
+int button3State = LOW; // staff mode
+int button4State = LOW; // MIDI in/out mode
+
+//pins for program buttons and button LEDs and knob
+const byte buttonTestPin = 22;
+const byte button1Pin = 50;
+const byte button2Pin = 51;
+const byte button3Pin = 52;
+const byte button4Pin = 53;
+
+const byte testLED = 23;
+const byte button1LED = 46;
+const byte button2LED = 47;
+const byte button3LED = 48;
+const byte button4LED = 49;
+
+const byte knobpin = A4;
+byte knobval = 0;
+
+//for program 1 pulsing circles
+byte r1 = 3;
+byte r2 = 2;
+byte r3 = 1;
+byte r4 = 0;
+byte r5 = 0;
+byte i = 0;
+
+
+//matrix location
+byte x1;
+byte y1;
+byte x2; // x2 and y2 are only used for transforming sensor coordinates based on quadrant (when x and y need to invert, extra variables required for calculations)
+byte y2;
+byte quad = 3;
+
+//matrix color
+byte r;
+byte g;
+byte b;
+
+//sensor values
+int xaccel;
+int yaccel;
+int zaccel;
+int xgyro;
+int ygyro;
+int zgyro;
+
+//MIDI variables
+byte commandByte;
+byte noteByte;
+byte velocityByte;
+byte commandOut;
+byte noteOut;
+byte velocityOut;
+
+byte n;
+
+/**************************************************************************/
+/*
+    Configures the gain and integration time for the TSL2561
+*/
+/**************************************************************************/
+void configureSensor(void)
+{
+  // 1.) Set the accelerometer range
+  lsm.setupAccel(lsm.LSM9DS0_ACCELRANGE_2G);
+  //lsm.setupAccel(lsm.LSM9DS0_ACCELRANGE_4G);
+  //lsm.setupAccel(lsm.LSM9DS0_ACCELRANGE_6G);
+  //lsm.setupAccel(lsm.LSM9DS0_ACCELRANGE_8G);
+  //lsm.setupAccel(lsm.LSM9DS0_ACCELRANGE_16G);
+  
+  // 2.) Set the magnetometer sensitivity
+  lsm.setupMag(lsm.LSM9DS0_MAGGAIN_2GAUSS);
+  //lsm.setupMag(lsm.LSM9DS0_MAGGAIN_4GAUSS);
+  //lsm.setupMag(lsm.LSM9DS0_MAGGAIN_8GAUSS);
+  //lsm.setupMag(lsm.LSM9DS0_MAGGAIN_12GAUSS);
+
+  // 3.) Setup the gyroscope
+  lsm.setupGyro(lsm.LSM9DS0_GYROSCALE_245DPS);
+  //lsm.setupGyro(lsm.LSM9DS0_GYROSCALE_500DPS);
+  //lsm.setupGyro(lsm.LSM9DS0_GYROSCALE_2000DPS);
+}
+
+/**************************************************************************/
+/*
+    Arduino setup function (automatically called at startup)
+*/
+/**************************************************************************/
+void setup(void) 
+{
+    matrix.begin(); //LED matrix
+
+    if (NUMDISPLAYS >3) {
+      pheight = 64; 
+      pwidth = 96;
+      }
+
+    x1 = 80;
+    y1 = 16;
+    
+     // initialize the button LED pins as output:
+     pinMode(testLED, OUTPUT);
+     pinMode(button1LED, OUTPUT);
+     pinMode(button2LED, OUTPUT);
+     pinMode(button3LED, OUTPUT);
+     pinMode(button4LED, OUTPUT);
+     
+    // initialize the button pins as input:
+    pinMode(buttonTestPin, INPUT);
+    pinMode(button1Pin, INPUT);
+    pinMode(button2Pin, INPUT);
+    pinMode(button3Pin, INPUT);
+    pinMode(button4Pin, INPUT);
+
+    digitalWrite(button1LED, HIGH);
+    
+    while (!Serial);  // wait for flora/leonardo
+
+    Serial.begin(250000);
+    Serial1.begin(31250);
+    Serial.println(F("LSM9DS0 9DOF Sensor Test")); Serial.println("");
+  
+    /* Initialise the sensor */
+    if(!lsm.begin())
+    {
+      /* There was a problem detecting the LSM9DS0 ... check your connections */
+      Serial.print(F("Ooops, no LSM9DS0 detected ... Check your wiring or I2C ADDR!"));
+      while(1);
+    }
+    Serial.println(F("Found LSM9DS0 9DOF"));
+  
+    /* Setup the sensor gain and integration time */
+    configureSensor();
+  
+    /* We're ready to go! */
+    Serial.println("");
+}
+
+void colorCalc() {
+                   //color calcs
+                   r = knobval;
+                   g = random(0,8);
+                   b = 7-knobval;  
+}
+
+void mapCoord() {
+                    // map coordinates to LED matrix layout e.g., movement from panel to panel
+                  if (quad == 3 && y1 < 1) {
+                    y1 = 32 + y1;
+                    x1 = x1 - 64;
+              //     if (x1 <33 || x1 > 64) map(x1, 0, 128, 33, 64); 
+                  }
+                  else if (quad == 2 && y1 < 1) {
+                    x2 = x1;
+                    y2 = y1;
+                    x1 = - y1;
+                    y1 = x2 - 32;
+                  }
+                  else if (quad == 4 && y1 < 1) {
+                    x2 = x1;
+                    y2 = y1;
+                    x1 = 32+y1;
+                    y1 = x2-96; 
+                  }
+                  else if (quad == 1 && x1 < 1) {
+                    x2 = x1;
+                    y2 = y1;
+                    x1 = y1 + 32;
+                    y1 = -x2;                    
+                  }
+                  else if (quad == 1 && x1 > 32) {
+                    x2 = x1;
+                    y2 = y1;
+                    x1 = y1 + 96;
+                    y1 = x2 - 32;
+                  }
+                  else if (quad == 1 && y1 > 32) {
+                    y1 = y1 -32;
+                    x1 = x1 + 64;
+                  }           
+}
+
+void MIDIout() {
+  Serial1.write(commandOut);
+  Serial1.write(noteOut);
+  Serial1.write(velocityOut);
+}
+
+void buttonstate() {
+  //check buttons
+  buttonTestState = digitalRead(buttonTestPin);
+  button1State = digitalRead(button1Pin);
+  button2State = digitalRead(button2Pin);
+  button3State = digitalRead(button3Pin);
+  button4State = digitalRead(button4Pin);
+
+    if (buttonTestState == LOW) digitalWrite(testLED, LOW);
+
+   if (buttonTestState == HIGH) {
+    digitalWrite(testLED, HIGH);
+    testprogram = 1;  }
+   else if (button1State == HIGH) {
+  digitalWrite(button1LED, HIGH);
+  digitalWrite(button2LED, LOW);
+  digitalWrite(button3LED, LOW);
+  digitalWrite(button4LED, LOW);
+  digitalWrite(testLED, LOW);
+  buttonprogram = 1;
+  testprogram= 0;}
+  else if (button2State == HIGH) {
+  digitalWrite(button1LED, LOW);
+  digitalWrite(button2LED, HIGH);
+  digitalWrite(button3LED, LOW);
+  digitalWrite(button4LED, LOW);
+  digitalWrite(testLED, LOW);
+  buttonprogram = 2; 
+  testprogram= 0;}
+  else if (button3State == HIGH) {
+  digitalWrite(button1LED, LOW);
+  digitalWrite(button2LED, LOW);
+  digitalWrite(button3LED, HIGH);
+  digitalWrite(button4LED, LOW);
+  digitalWrite(testLED, LOW);
+  buttonprogram = 3; 
+  testprogram= 0;}
+  else if (button4State == HIGH) {
+  digitalWrite(button1LED, LOW);
+  digitalWrite(button2LED, LOW);
+  digitalWrite(button3LED, LOW);
+  digitalWrite(button4LED, HIGH);
+  digitalWrite(testLED, LOW);
+  buttonprogram = 4; 
+  testprogram= 0;}
+  else if (buttonTestState == LOW) digitalWrite(testLED, LOW);
+}
+
+void loop(void) 
+{  
+  sensors_event_t accel, mag, gyro, temp;
+  lsm.getEvent(&accel, &mag, &gyro, &temp); 
+                   
+  buttonstate();
+
+  //first, check test button and run test program that prints all data to serial port
+  if (buttonTestState == HIGH) {
+    
+                 // LED matrix and z rotation
+                 x1 = x1 + xgyro * cos(zgyro) - ygyro * sin(zgyro);
+                 y1 = y1 + xgyro * sin(zgyro) - ygyro * cos(zgyro);
+                 
+                   if (x1>pwidth) x1=pwidth;
+                   if (y1>pheight) y1=pheight;
+                   if (x1<1)  x1=1;
+                   if (y1<1)  y1=1;
+        Serial.println("******************************************\n");
+        Serial.print("buttonprogram:"); Serial.print(buttonprogram); Serial.print("\n");
+        Serial.print("buttonTestState:"); Serial.print(buttonTestState);
+        Serial.println("\n");
+        Serial.print("button1State:"); Serial.print(button1State);
+        Serial.println("\n");
+        Serial.print("button2State:"); Serial.print(button2State);
+        Serial.println("\n");
+        Serial.print("button3State:"); Serial.print(button3State);
+        Serial.println("\n");
+        Serial.print("button4State:"); Serial.print(button4State);
+                    
+                 // print values for LED matrix
+                Serial.print("LED matrix X: "); Serial.print(x1); Serial.print(" ");
+                Serial.print("  \tY: "); Serial.print(y1);       Serial.print(" ");
+                Serial.println("\n");
+
+                // print MIDI in values
+                Serial.print("MIDI command in: "); Serial.print(commandByte); Serial.print(" ");
+                Serial.print("MIDI note in: "); Serial.print(noteByte); Serial.print(" ");
+                Serial.print("MIDI velocity in: "); Serial.print(velocityByte); Serial.print(" ");
+                   Serial.println("\n");
+
+                // print MIDI out values
+                Serial.print("MIDI command out: "); Serial.print(commandOut); Serial.print(" ");
+                Serial.print("MIDI note out: "); Serial.print(noteOut); Serial.print(" ");
+                Serial.print("MIDI velocity out: "); Serial.print(velocityOut); Serial.print(" ");
+                   Serial.println("\n");
+
+                // print out accelleration data
+               Serial.print("Accel X: "); Serial.print(accel.acceleration.x); Serial.print(" ");
+               Serial.print("  \tY: "); Serial.print(accel.acceleration.y);       Serial.print(" ");
+               Serial.print("  \tZ: "); Serial.print(accel.acceleration.z);     Serial.println("  \tm/s^2");
+                  Serial.println("\n");
+              
+               // print out magnetometer data
+               Serial.print("Magn. X: "); Serial.print(mag.magnetic.x); Serial.print(" ");
+               Serial.print("  \tY: "); Serial.print(mag.magnetic.y);       Serial.print(" ");
+               Serial.print("  \tZ: "); Serial.print(mag.magnetic.z);     Serial.println("  \tgauss");
+                   Serial.println("\n");
+                   
+               // print out gyroscopic data
+               Serial.print("Gyro  X: "); Serial.print(gyro.gyro.x); Serial.print(" ");
+               Serial.print("  \tY: "); Serial.print(gyro.gyro.y);       Serial.print(" ");
+               Serial.print("  \tZ: "); Serial.print(gyro.gyro.z);     Serial.println("  \tdps");
+                  Serial.println("\n");
+              
+                // print out temperature data
+                Serial.print("Temp: "); Serial.print(temp.temperature); Serial.println(" *C");
+                   Serial.println("******************************************\n");
+
+                delay(500);
+                
+  }
+
+  else if (button1State == HIGH) {        // matrix lines
+                      
+                      matrix.fillScreen(matrix.Color333(0, 0, 0));                 
+
+                      int arrayX[16]; 
+                      int arrayX2[16];
+                      int arrayX3[16];
+                      int arrayX4[16];
+                      int arrayY[16];
+                      int arrayY2[16];
+                      int arrayY3[16];
+                      int arrayY4[16];
+                   
+                     x1 = 80;
+                     y1 = 16;
+                      
+                      //draw lines
+                      for (i=0; i<8; i++) {
+                        matrix.drawLine(33, 9 + 2*i, 128, 9 + 2*i,matrix.Color333(0, 0, 1));
+                        matrix.drawLine(9 + 2*i, 1, 9+ 2*i, 32, matrix.Color333(0, 0, 1));
+                        matrix.drawLine(73 + 2*i, 1, 73 + 2*i, 32, matrix.Color333(0, 0, 1));
+                    
+                        arrayX[i] = 9+ 2*i - 1;
+                        arrayY[i] = random(1, 48);
+                       
+                        arrayX2[i] = 33 + random(0,48);
+                        arrayY2[i] = 9 +2*i - 1;
+
+
+                        arrayX3[i] = 80 + random(0, 48);
+                        arrayY3[i] = 9 + 2*i - 1;    
+
+                        arrayX4[i] = 73 + 2*i - 1;
+                        arrayY4[i] = random(16,33);
+                      
+                        matrix.drawPixel(arrayX[i], arrayY[i], matrix.Color333(5,2,0));
+                        matrix.drawPixel(arrayX2[i], arrayY2[i], matrix.Color333(2,0,5));
+                        matrix.drawPixel(arrayX3[i], arrayY3[i], matrix.Color333(2,5,0));
+                        matrix.drawPixel(arrayX4[i], arrayY4[i], matrix.Color333(0, 5, 2));
+
+                      }
+                 
+                 while (buttonprogram == 1 && buttonTestState == LOW) {     
+                       for (i=0; i<8; i++) {
+                        
+                         /* Get a new sensor event */ 
+                       sensors_event_t accel, mag, gyro, temp;
+                       lsm.getEvent(&accel, &mag, &gyro, &temp); 
+                       
+                       // undraw pixels 
+                        matrix.drawPixel(arrayX[i], arrayY[i], matrix.Color333(0,0,0));
+                        matrix.drawPixel(arrayX2[i], arrayY2[i], matrix.Color333(0,0,0));
+                        matrix.drawPixel(arrayX3[i], arrayY3[i], matrix.Color333(0,0,0));
+                        matrix.drawPixel(arrayX4[i], arrayY4[i], matrix.Color333(0,0,0));
+                  
+                        knobval = map(analogRead(knobpin), 0, 1023, 0, 10);   
+                        
+                        arrayY[i] = arrayY[i] + knobval*accel.acceleration.y;
+                        arrayX2[i] = arrayX2[i] + knobval*accel.acceleration.y;
+                        arrayX3[i] = arrayX3[i] - knobval*accel.acceleration.y;  
+                        arrayY4[i] = arrayY4[i] - knobval*accel.acceleration.y;
+
+
+                       if (arrayY[i] > 32) {
+                        arrayY[i] = 1;  
+                        arrayX[i] = arrayX[i] + 64;  
+                       }
+                       if (arrayX[i] > 32 && arrayY[i]>16) {
+                        arrayX[i] = arrayX[i] - 64;
+                        arrayY[i] = 1;
+                       }
+                       if (arrayY[i] < 1 && arrayX[i] < 33) {
+                        arrayY[i] = 16;   
+                        arrayX[i] = arrayX[i] + 64;            
+                       }
+                       if (arrayY[i] < 1 && arrayX[i] > 33) {
+                        arrayY[i] = 32;
+                        arrayX[i] = arrayX[i] - 64;
+                       }
+                       if (arrayX2[i] > 80) arrayX2[i] = 33;  
+                       if (arrayX2[i] < 33) arrayX2[i] = 80;  
+                       if (arrayX3[i] < 81 ) arrayX3[i] = 128;  
+                       if (arrayX3[i] > 128 ) arrayX3[i] = 81;  
+                       if (arrayY4[i] > 32) arrayY4[i] = 16;
+                       if (arrayY4[i] < 16) arrayY4[i] = 32;
+
+                      //redraw pixel based on movement
+
+                        matrix.drawPixel(arrayX[i], arrayY[i], matrix.Color333(7,2,0));
+                        matrix.drawPixel(arrayX2[i], arrayY2[i], matrix.Color333(2,0,7));
+                        matrix.drawPixel(arrayX3[i], arrayY3[i], matrix.Color333(2,5,0));
+                        matrix.drawPixel(arrayX4[i], arrayY4[i], matrix.Color333(0,5,2));
+                        
+                        matrix.drawCircle(x1, y1, i, matrix.Color333(random(0,7), random(0,7), random(0,7)));    
+                                         
+                        buttonstate();
+                       }
+                      
+               // delay(5);
+                 }}
+                 
+  else if (button2State == HIGH) {
+  // program 2: pulse image on each quadrant, motion sensitive, overlaps and moves among quadrants
+
+                      x1 = 16;
+                      y1 = 16;
+                      knobval = map(analogRead(knobpin), 0, 1023, 1, 16);   
+                      
+                  while (buttonprogram == 2 && buttonTestState == LOW) {     
+                     for(i=0; i<knobval; i++) {        
+
+                      /* Get a new sensor event */ 
+                   sensors_event_t accel, mag, gyro, temp;
+                   lsm.getEvent(&accel, &mag, &gyro, &temp); 
+
+                    knobval = map(analogRead(knobpin), 0, 1023, 1, 16);   
+                    quad = 1;
+                    
+                     //map sensor to LED panel size
+                        xgyro = map(gyro.gyro.x, 0, 360, 0,64); 
+                        ygyro = map(gyro.gyro.y,0,360,0,64);
+                        zgyro = map(gyro.gyro.z, 0, 360, 0, 16);
+                          
+                  //LED matrix and z rotation
+
+                    x1 = x1 -( xgyro * cos(zgyro) - ygyro * sin(zgyro));
+                    y1 = y1 +( xgyro * sin(zgyro) + ygyro * cos(zgyro));
+  
+                    colorCalc(); // sets r g b
+
+                    // quad 1
+              
+                   if (x1>128) x1=128;
+                   if (y1>32) y1=32;
+                   if (x1<1)  x1=1;
+                   if (y1<1)  y1=1;
+
+                   matrix.fillScreen(matrix.Color333(0, 0, 0));
+                    
+                    matrix.drawCircle(x1, y1, r1+1, matrix.Color333(r, g, b));  
+                    matrix.drawCircle(x1, y1, r2+i, matrix.Color333(5, 1, b));
+                    matrix.drawCircle(x1, y1, r3+i, matrix.Color333(0, 2, 4));         
+                    matrix.drawCircle(x1, y1, r4 + i/2,matrix.Color333(3, 3, 0));
+                    matrix.fillCircle(x1, y1, r5+1, matrix.Color333(5, 1 ,0));
+                    matrix.drawPixel(x1, y1, matrix.Color333(7, 0, 0));
+                    matrix.drawCircle(x1, y1, 2 * i,matrix.Color333(7, 0, 0));
+                    matrix.drawCircle(x1, y1, 2 * i+1 ,matrix.Color333(7, 3, 0));
+                    
+                    //draw overflow onto other panels
+
+                    if (y1 + (r3 + i) > 32) matrix.drawCircle( x1 + 64, -(32 - y1), r3 + i, matrix.Color333(0, 2, 4));
+                    if (x1 -(r3 + i) < 1) matrix.drawCircle( y1 + 32, -x1, r3+ i, matrix.Color333(0, 2, 4));
+                    if (x1 + (r3 + i) > 32) matrix.drawCircle(  y1, x1 - 32, r3 + i,matrix.Color333(0, 2, 4));
+                    
+                    if (y1 + (r2 + i) > 32) matrix.drawCircle( x1 + 64, -(32 - y1), r2 + i, matrix.Color333(5, 1, b));
+                    if (x1 -(r2 + i) < 1) matrix.drawCircle( y1 + 32, -x1, r2+ i, matrix.Color333(5, 1, b));
+                    if (x1 + (r2 + i) > 32) matrix.drawCircle(  y1, x1 - 32, r2 + i,matrix.Color333(5, 1, b));
+
+                    if (y1 + (r4+i/2) > 32) matrix.drawCircle( x1 + 64, -(32 - y1), r4+i/2, matrix.Color333(3, 3, 0));
+                    if (x1 -(r4+i/2 ) < 1) matrix.drawCircle( y1 + 32, -x1, r4+i/2, matrix.Color333(3, 3, 0));
+                    if (x1 + (r4+i/2 ) > 32) matrix.drawCircle(  y1, x1 - 32, r4+i/2,matrix.Color333(3, 3, 0));
+
+                    if (y1 + (2*i) > 32) matrix.drawCircle( x1 + 64, -(32 - y1), r3 + 2*i, matrix.Color333(7, 0, 0));
+                    if (x1 -(2*i) < 1) matrix.drawCircle( y1 + 32, -x1, r3+ 2*i, matrix.Color333(7, 0, 0));
+                    if (x1 + (2*i) > 32) matrix.drawCircle(  y1, x1 - 32, r3 + 2*i,matrix.Color333(7, 0, 0));
+      
+                    if (y1 + ((2*i)+1) > 32) matrix.drawCircle( x1 + 64, -(32 - y1), r3 + (2*i+1), matrix.Color333(7, 3, 0));
+                    if (x1 - ((2*i)+1) < 1) matrix.drawCircle( y1 + 32, -x1, r3+ (2*i+1), matrix.Color333(7, 3, 0));
+                    if (x1 + ((2*i)+1) > 32) matrix.drawCircle(  y1, x1 - 32, r3 + (2*i+1),matrix.Color333(7, 3, 0));
+ 
+                 quad = quad + 1;
+                 
+                   //quad 2
+
+                   x1 = x1 + 32;
+                    
+                   if (x1>128) x1=128;
+                   if (y1>32) y1=32;
+                   if (x1<1)  x1=1;
+                   if (y1<1)  y1=1;
+                   
+                    matrix.drawCircle(x1, y1, r1+1, matrix.Color333(r, g, b));  
+                    matrix.drawCircle(x1, y1, r2+i, matrix.Color333(5, 1, b));
+                    matrix.drawCircle(x1, y1, r3+i, matrix.Color333(0, 2, 4));         
+                    matrix.drawCircle(x1, y1, r4 + i/2,matrix.Color333(3, 3, 0));
+                    matrix.fillCircle(x1, y1, r5+1, matrix.Color333(5, 1 ,0));
+                    matrix.drawPixel(x1, y1, matrix.Color333(7, 0, 0));
+                    matrix.drawCircle(x1, y1, 2 * i,matrix.Color333(7, 0, 0));
+                    matrix.drawCircle(x1, y1, 2 * i+1 ,matrix.Color333(7, 3, 0));
+
+                       //draw overflow onto other panels
+                    if (y1 - (r3 + i) < 1) matrix.drawCircle( -y1, x1 - 32, r3 + i, matrix.Color333(0, 2, 4));
+                    if (y1 - (r2 + i) < 1) matrix.drawCircle( -y1, x1 - 32, r2 + i, matrix.Color333(5, 1, b));
+                    if (y1 - (r4 + i/2) < 1) matrix.drawCircle( -y1, x1 - 32, r4+i/2, matrix.Color333(3, 3, 0));
+                    if (y1 - (2*i) < 1) matrix.drawCircle( -y1, x1 - 32, r3 + 2*i, matrix.Color333(7, 0, 0));
+                    if (y1 - ((2*i)+1) < 1) matrix.drawCircle( -y1, x1 - 32, r3 + (2*i+1), matrix.Color333(7, 3, 0));
+                    
+                   quad = quad + 1;
+                   
+                    //quad 3
+                    x1 = x1 + 32;
+                    
+                   if (x1>128) x1=128;
+                   if (y1>32) y1=32;
+                   if (x1<1)  x1=1;
+                   if (y1<1)  y1=1;
+                   
+                    matrix.drawCircle(x1, y1, r1+1, matrix.Color333(r, g, b));  
+                    matrix.drawCircle(x1, y1, r2+i, matrix.Color333(5, 1, b));
+                    matrix.drawCircle(x1, y1, r3+i, matrix.Color333(0, 2, 4));         
+                    matrix.drawCircle(x1, y1, r4 + i/2,matrix.Color333(3, 3, 0));
+                    matrix.fillCircle(x1, y1, r5+1, matrix.Color333(5, 1 ,0));
+                    matrix.drawPixel(x1, y1, matrix.Color333(7, 0, 0));
+                    matrix.drawCircle(x1, y1, 2 * i,matrix.Color333(7, 0, 0));
+                    matrix.drawCircle(x1, y1, 2 * i+1 ,matrix.Color333(7, 3, 0));
+
+
+                    //draw overflow onto other panels
+                    if (y1 - (r3 + i) < 1) matrix.drawCircle( x1 - 64, y1 + 32, r3 + i, matrix.Color333(0, 2, 4));
+                    if (y1 - (r2 + i) < 1) matrix.drawCircle( x1 - 64, y1 + 32, r2 + i, matrix.Color333(5, 1, b));
+                    if (y1 - (r4+i/2 ) < 1) matrix.drawCircle( x1 - 64, y1 + 32, r4+i/2, matrix.Color333(3, 3, 0));
+                    if (y1 - (2*i) < 1) matrix.drawCircle( x1 - 64, y1 + 32, r3 + 2*i, matrix.Color333(7, 0, 0));
+                    if (y1 - ((2*i)+1) < 1) matrix.drawCircle( x1 - 64, y1 + 32, r3 + (2*i+1), matrix.Color333(7, 3, 0));
+  
+                   quad = quad + 1;
+                    
+                    //quad 4
+
+                   x1 = x1 + 32;
+                    
+                   if (x1>128) x1=128;
+                   if (y1>32) y1=32;
+                   if (x1<1)  x1=1;
+                   if (y1<1)  y1=1;
+                    
+                    matrix.drawCircle(x1, y1, r1+1, matrix.Color333(r, g, b));  
+                    matrix.drawCircle(x1, y1, r2+i, matrix.Color333(5, 1, b));
+                    matrix.drawCircle(x1, y1, r3+i, matrix.Color333(0, 2, 4));         
+                    matrix.drawCircle(x1, y1, r4 + i/2,matrix.Color333(3, 3, 0));
+                    matrix.fillCircle(x1, y1, r5+1, matrix.Color333(5, 1 ,0));
+                    matrix.drawPixel(x1, y1, matrix.Color333(7, 0, 0));
+                    matrix.drawCircle(x1, y1, 2 * i,matrix.Color333(7, 0, 0));
+                    matrix.drawCircle(x1, y1, 2 * i+1 ,matrix.Color333(7, 3, 0));
+
+
+                    //draw overflow onto other panels
+                    if (y1 - (r3 + i) < 1) matrix.drawCircle(  y1 + 32, x1 - 96, r3 + i,matrix.Color333(0, 2, 4));
+                    if (y1 - (r2 + i) < 1) matrix.drawCircle(  y1 + 32, x1 - 96, r2 + i,matrix.Color333(5, 1, b));
+                    if (y1 - (r4 + i/2) < 1) matrix.drawCircle(  y1 + 32, x1 - 96, r4 + i/2,matrix.Color333(3, 3, 0));
+                    if (y1 - (2*i) < 1) matrix.drawCircle(  y1 + 32, x1 - 96, r3 + 2*i,matrix.Color333(7, 0, 0));
+                    if (y1 - ((2*i)+1) < 1) matrix.drawCircle(  y1 + 32, x1 - 96, r3 + (2*i+1),matrix.Color333(7, 3, 0));
+
+                       x1 = x1 - 96;
+                       buttonstate(); 
+  }}}
+
+  else if (buttonprogram == 3) {     // sprites
+      
+     while (buttonprogram == 3 && buttonTestState == LOW) {     
+
+         knobval = map(analogRead(knobpin), 0, 1023, 0, 16);   
+         int arrayX[knobval];
+         int arrayY[knobval];
+         int arrayQuad[knobval];
+         
+         // create n = knobval sprites
+
+           for(n=0; n < knobval; n++) {
+
+              arrayX[n] = random(1,129);
+              arrayY[n] = random(1,33);
+              arrayQuad[n] = random(0,4);
+           }
+           
+           for (i=0; i < 9 - knobval/2; i++) {
+           
+              matrix.fillScreen(matrix.Color333(0, 0, 0));   
+                
+               for (n=0; n < knobval; n++) {            
+                 knobval = map(analogRead(knobpin), 0, 1023, 0, 16);   
+
+                   /* Get a new sensor event */ 
+
+                   // not using this section -- runs too slow when trying to get/use sensor values
+
+                   
+                  // sensors_event_t accel, mag, gyro, temp;
+                 //  lsm.getEvent(&accel, &mag, &gyro, &temp); 
+      
+                  //map sensor to LED panel size
+             //      xgyro = map(gyro.gyro.x, 0, 360, 0,64); 
+              //     ygyro = map(gyro.gyro.y,0,360,0,64);
+            //      zgyro = map(gyro.gyro.z, 0, 360, 0, 16);
+
+                  // move sprites based on sensor event
+                  //  if ( (n % 2) == 0) {
+                  //     arrayX[n] = arrayX[n] -( xgyro * cos(zgyro) - ygyro * sin(zgyro));        
+                  //     arrayY[n] = arrayY[n] +( xgyro * sin(zgyro) + ygyro * cos(zgyro));       
+               //     }
+               //     else {
+                 //      arrayX[n] = arrayX[n] +( xgyro * cos(zgyro) - ygyro * sin(zgyro));        
+                //       arrayY[n] = arrayY[n] -( xgyro * sin(zgyro) + ygyro * cos(zgyro));       
+                  //  }
+
+                  // draw sprites
+                  
+                   if (arrayX[n]>128) arrayX[n]=128;
+                   if (arrayY[n]>32) arrayY[n]=32;
+                   if (arrayX[n]<1)  arrayX[n]=1;
+                   if (arrayY[n]<1)  arrayY[n]=1;
+
+                 
+                 x1 = arrayX[n];
+                 y1 = arrayY[n];
+                 
+                 matrix.drawCircle(x1, y1, r1+1, matrix.Color333(1, 3, 6));  
+                 matrix.drawCircle(x1, y1, r3+i, matrix.Color333(0, 2, 4));         
+                 matrix.drawCircle(x1, y1, r4 + i/2,matrix.Color333(3, 3, 0));
+                 matrix.drawPixel(x1, y1, matrix.Color333(7, 0, 0));
+                 matrix.drawCircle(x1, y1, 2 * i+1 ,matrix.Color333(7, 3, 0));   
+                   
+                    //draw overflow onto other panels
+                    if (arrayQuad[n] == 1 && arrayY[n] - (r3 + i) < 1) matrix.drawCircle( -arrayY[n], arrayX[n] - 32, r3 + i, matrix.Color333(0, 2, 4));
+                    if (arrayQuad[n] == 2 && arrayY[n] - (r3 + i) < 1) matrix.drawCircle( arrayX[n] - 64, arrayY[n] + 32, r3 + i, matrix.Color333(0, 2, 4));
+                    if (arrayQuad[n] == 0 && arrayY[n] + (r3 + i) > 32) matrix.drawCircle( arrayX[n] + 64, -(32 - arrayY[n]), r3 + i, matrix.Color333(0, 2, 4));
+                    if (arrayQuad[n] == 0 && arrayX[n] -(r3 + i) < 1) matrix.drawCircle( arrayY[n] + 32, -arrayX[n], r3+ i, matrix.Color333(0, 2, 4));
+                    if (arrayQuad[n] == 0 && arrayX[n] + (r3 + i) > 32) matrix.drawCircle(  arrayY[n], arrayX[n] - 32, r3 + i,matrix.Color333(0, 2, 4));
+                    if (arrayQuad[n] == 3 && arrayY[n] - (r3 + i) < 1) matrix.drawCircle(  arrayY[n] + 32, arrayX[n] - 96, r3 + i,matrix.Color333(0, 2, 4));
+                                       
+                    if (arrayQuad[n] == 1 && arrayY[n] - (r4 + i/2) < 1) matrix.drawCircle( -arrayY[n], arrayX[n] - 32, r4+i/2, matrix.Color333(3, 3, 0));
+                    if (arrayQuad[n] == 2 && arrayY[n] - (r4+i/2 ) < 1) matrix.drawCircle( arrayX[n] - 64, arrayY[n] + 32, r4+i/2, matrix.Color333(3, 3, 0));
+                    if (arrayQuad[n] == 0 && arrayY[n] + (r4+i/2) > 32) matrix.drawCircle( arrayX[n] + 64, -(32 - arrayY[n]), r4+i/2, matrix.Color333(3, 3, 0));
+                    if (arrayQuad[n] == 0 && arrayX[n] -(r4+i/2 ) < 1) matrix.drawCircle( arrayY[n] + 32, -arrayX[n], r4+i/2, matrix.Color333(3, 3, 0));
+                    if (arrayQuad[n] == 0 && arrayX[n] + (r4+i/2 ) > 32) matrix.drawCircle(  arrayY[n], arrayX[n] - 32, r4+i/2,matrix.Color333(3, 3, 0));
+                    if (arrayQuad[n] == 3 && arrayY[n] - (r4 + i/2) < 1) matrix.drawCircle(  arrayY[n] + 32, arrayX[n] - 96, r4 + i/2,matrix.Color333(3, 3, 0));
+
+                    if (arrayQuad[n] == 1 && arrayY[n] - ((2*i)+1) < 1) matrix.drawCircle( -arrayY[n], arrayX[n] - 32, r3 + (2*i+1), matrix.Color333(7, 3, 0));
+                    if (arrayQuad[n] == 2 && arrayY[n] - ((2*i)+1) < 1) matrix.drawCircle( arrayX[n] - 64, arrayY[n] + 32, r3 + (2*i+1), matrix.Color333(7, 3, 0));
+                    if (arrayQuad[n] == 0 && arrayY[n] + ((2*i)+1) > 32) matrix.drawCircle( arrayX[n] + 64, -(32 - arrayY[n]), r3 + (2*i+1), matrix.Color333(7, 3, 0));
+                    if (arrayQuad[n] == 0 && arrayX[n] - ((2*i)+1) < 1) matrix.drawCircle( arrayY[n] + 32, -arrayX[n], r3+ (2*i+1), matrix.Color333(7, 3, 0));
+                    if (arrayQuad[n] == 0 && arrayX[n] + ((2*i)+1) > 32) matrix.drawCircle(  arrayY[n], arrayX[n] - 32, r3 + (2*i+1),matrix.Color333(7, 3, 0));
+                    if (arrayQuad[n] == 3 && arrayY[n] - ((2*i)+1) < 1) matrix.drawCircle(  arrayY[n] + 32, arrayX[n] - 96, r3 + (2*i+1),matrix.Color333(7, 3, 0));
+
+                    buttonstate();
+     }}
+     }
+  }
+
+  else if (button4State == HIGH) { 
+
+         int arrayX[16];
+         int arrayY[16];
+         int arrayQuad[16];
+         
+            while (buttonprogram == 4 && buttonTestState == LOW) {              
+   
+                 knobval = map(analogRead(knobpin), 0, 1023, 0, 7);   
+                 colorCalc();
+
+                   /* Get a new sensor event */ 
+
+                   // not using this section -- runs too slow when trying to get/use sensor values
+
+                 // sensors_event_t accel, mag, gyro, temp;
+                  //lsm.getEvent(&accel, &mag, &gyro, &temp); 
+      
+                  //map sensor to LED panel size
+                 //  xgyro = map(gyro.gyro.x, 0, 360, 0,48); 
+                //   ygyro = map(gyro.gyro.y,0,360,0,48);
+                 //  zgyro = map(gyro.gyro.z, 0, 360, 0, 16);
+
+                  matrix.fillScreen(matrix.Color333(0, 0, 0));   
+
+             for(n=0; n < 16; n++) {
+                     arrayX[n] = random(1,33);
+                     arrayY[n] = random(1,33);
+                     arrayQuad[n] = random(0,4);
+                  
+                  // move sprites based on sensor event
+                 //   if ( (n % 2) == 0) {
+                 //      arrayX[n] = arrayX[n] -( xgyro * cos(zgyro) - ygyro * sin(zgyro));        
+                 //      arrayY[n] = arrayY[n] +( xgyro * sin(zgyro) + ygyro * cos(zgyro));       
+                //    }
+                 //   else {
+                 //     arrayX[n] = arrayX[n] +( xgyro * cos(zgyro) - ygyro * sin(zgyro));        
+                  //    arrayY[n] = arrayY[n] -( xgyro * sin(zgyro) + ygyro * cos(zgyro));       
+                  //  }
+             //
+                  // draw sprites
+
+                 if (arrayX[n] < 1 || arrayX[n]>128) {
+                  arrayX[n] = random(1,33);
+                  arrayQuad[n] = random(0,4);
+                 }
+                 if (arrayY[n] < 1 || arrayY[n]>128) {
+                  arrayY[n] =random(1,33);
+                  arrayQuad[n] = random(0,4);
+                 }
+                              
+                 x1 = arrayX[n];
+                 y1 = arrayY[n];               
+                 
+                 matrix.drawCircle(x1 + arrayQuad[n]*32, y1, r2, matrix.Color333(r, g, b));  
+                 matrix.drawCircle(x1 + arrayQuad[n]*32, y1, r3, matrix.Color333(g, b, r));         
+  
+                   
+                    //draw overflow onto other panels
+                  //  if (arrayQuad[n] == 1 && arrayY[n] - r2 < 1) matrix.drawCircle( -arrayY[n], arrayX[n] + arrayQuad[n]*32 - 32, r2, matrix.Color333(r, g, b));
+                  //  if (arrayQuad[n] == 2 && arrayY[n] - r2 < 1) matrix.drawCircle( arrayX[n] + arrayQuad[n]*32 - 64, arrayY[n] + 32,r2, matrix.Color333(r, g, b));
+                  //  if (arrayQuad[n] == 0 && arrayY[n] + r2 > 32) matrix.drawCircle( arrayX[n] + arrayQuad[n]*32 + 64, -(32 - arrayY[n]),r2, matrix.Color333(r, g, b));
+                  //  if (arrayQuad[n] == 0 && arrayX[n] -r2 < 1) matrix.drawCircle( arrayY[n] + 32, -(arrayX[n] + arrayQuad[n]*32),r2, matrix.Color333(r, g, b));
+                  //  if (arrayQuad[n] == 0 && arrayX[n] + r2 > 32) matrix.drawCircle(  arrayY[n], arrayX[n] - 32 + arrayQuad[n]*32, r2,matrix.Color333(r, g, b));
+                  //  if (arrayQuad[n] == 3 && arrayY[n] - r2 < 1) matrix.drawCircle(  arrayY[n] + 32, arrayX[n] - 96 + arrayQuad[n]*32, r2,matrix.Color333(r, g, b));
+                                       
+                 //   if (arrayQuad[n] == 1 && arrayY[n] - r3 < 1) matrix.drawCircle( -arrayY[n], arrayX[n] - 32 + arrayQuad[n]*32,r3, matrix.Color333(g, b, r));
+                 //   if (arrayQuad[n] == 2 && arrayY[n] - r3< 1) matrix.drawCircle( arrayX[n] - 64 + arrayQuad[n]*32, arrayY[n] + 32, r3, matrix.Color333(g, b, r));
+                 //   if (arrayQuad[n] == 0 && arrayY[n] + r3> 32) matrix.drawCircle( arrayX[n] + 64 + arrayQuad[n]*32, -(32 - arrayY[n]), r3, matrix.Color333(g, b, r));
+                 //   if (arrayQuad[n] == 0 && arrayX[n] -r3 < 1) matrix.drawCircle( arrayY[n] + 32, -(arrayX[n] + arrayQuad[n]*32), r3, matrix.Color333(g, b, r));
+                 //   if (arrayQuad[n] == 0 && arrayX[n] + r3 > 32) matrix.drawCircle(  arrayY[n], arrayX[n] - 32 + arrayQuad[n]*32,r3,matrix.Color333(g, b, r));
+                 //   if (arrayQuad[n] == 3 && arrayY[n] - r3 < 1) matrix.drawCircle(  arrayY[n] + 32, arrayX[n] - 96 + arrayQuad[n]*32,r3 ,matrix.Color333(g, b, r));
+
+                    buttonstate();
+     }}
+     }
+       
+}
