@@ -22,29 +22,6 @@
 /* Assign a unique base ID for this sensor */   
 Adafruit_LSM9DS0 lsm = Adafruit_LSM9DS0(1000);  // Use I2C, ID #1000
 
-
-/* Or, use Hardware SPI:
-  SCK -> SPI CLK
-  SDA -> SPI MOSI
-  G_SDO + XM_SDO -> tied together to SPI MISO
-  then select any two pins for the two CS lines:
-*/
-
-//#define LSM9DS0_XM_CS 10
-//#define LSM9DS0_GYRO_CS 9
-//Adafruit_LSM9DS0 lsm = Adafruit_LSM9DS0(LSM9DS0_XM_CS, LSM9DS0_GYRO_CS, 1000);
-
-/* Or, use Software SPI:
-  G_SDO + XM_SDO -> tied together to the MISO pin!
-  then select any pins for the SPI lines, and the two CS pins above
-*/
-
-//#define LSM9DS0_SCLK 13
-//#define LSM9DS0_MISO 12
-//#define LSM9DS0_MOSI 11
-
-//Adafruit_LSM9DS0 lsm = Adafruit_LSM9DS0(LSM9DS0_SCLK, LSM9DS0_MISO, LSM9DS0_MOSI, LSM9DS0_XM_CS, LSM9DS0_GYRO_CS, 1000);
-
 // If your 32x32 matrix has the SINGLE HEADER input,
 // use this pinout:
 #define CLK 11  // MUST be on PORTB! (Use pin 11 on Mega)
