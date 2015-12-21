@@ -219,6 +219,7 @@ void colorCalc() {
 
 void mapCoord() {
                     // map coordinates to LED matrix layout e.g., movement from panel to panel
+                    // order of panels is 1 = top panel, 2 = right of control panel, 3 = opposite of control panel, 4 = left of control panel
                   if (quad == 3 && y1 < 1) {
                     y1 = 32 + y1;
                     x1 = x1 - 64;
